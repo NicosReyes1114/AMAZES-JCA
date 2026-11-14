@@ -75,6 +75,42 @@ Decryption verifies the JCA tag and returns `(None, False)` on any modification.
 
 A CLI is included: `python amazes_jca.py`.
 
+### Running the test suite and benchmark
+
+Both scripts run from the repository root with Python 3. Keep these files in the
+same directory: `amazes_jca.py`, `benchmark.py`, `test_amazes_jca.py`,
+`pure_aes.py`, and `pure_chacha.py`.
+
+```text
+python test_amazes_jca.py
+python benchmark.py
+```
+
+The test suite uses only the Python standard library. It runs all 24 tests and
+prints a PASS/FAIL line for each one, followed by a final tally.
+
+The benchmark prints ten comparison tables to the CLI:
+
+1. Overview, including ciphertext expansion
+2. Encryption and decryption timing
+3. Throughput scaling (1, 10, and 100 KiB payloads)
+4. Session and key setup time
+5. Diffusion, with the changed plaintext character at the first, middle, and last position
+6. Tamper rejection (bit-flip, adjacent swap, truncation, splice)
+7. Wrong-key rejection and output randomization
+8. Ciphertext entropy and uniformity (chi-squared)
+9. Mutual information between plaintext and ciphertext
+10. IND-CPA left-or-right game
+
+The benchmark always runs the six pure-Python targets: AMAZES-JCA, pure-Python
+ChaCha20-Poly1305, pure-Python AES-256-GCM/CTR/CBC, and a pure-Python stream
+cipher control. If the optional `cryptography` package is installed
+(`pip install cryptography`), five hardware-accelerated targets are added
+(AES-256-GCM, ChaCha20-Poly1305, AES-256-CBC, AES-256-CTR, and an AES-ECB
+control), for 11 targets in total. Without it, the benchmark prints a note and
+skips the accelerated targets. Because every core target is pure Python, a full
+run takes on the order of one to two minutes.
+
 ---
 
 ## Measured characteristics
