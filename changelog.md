@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > It has no security proof and has not undergone public cryptanalysis. It must
 > not be used to protect real data. For real workloads use AES-GCM or
 > ChaCha20-Poly1305 from a maintained library.
+>
+> **Authorship:** v0.1 through v0.3 were developed with ChatGPT-4o assistance;
+> the v0.4 and v0.5 rework was assisted by a newer AI assistant. Planning,
+> ideas, and design decisions were the author's throughout.
 
 ## [Unreleased]
 
@@ -52,17 +56,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejection, six tamper vectors (bit-flip, adjacent swap, truncation, salt
   flip, tag flip, splice), charset-violation rejection, short-package
   rejection, invalid-key rejection, and fixed-salt diffusion check.
-* **Benchmark suite** comparing against AES-256-GCM/CBC/CTR and
+* **Expanded benchmark suite** comparing against AES-256-GCM/CBC/CTR and
   ChaCha20-Poly1305 in both hardware-accelerated and pure-Python
   (non-accelerated) forms, with AES-ECB as a deliberate failing control.
   Every pure-Python baseline was verified byte-identical (ciphertexts and
-  tags) against its library reference before benchmarking.
-* **IND-CPA left-or-right experiment** (100 trials) with the ECB control
-  failing at chance as expected.
-* **ASCII-aware randomness metrics:** entropy ceilings computed against the
-  95-character alphabet (log2(95) ≈ 6.57), normalized entropy percentages,
-  and chi-squared/df uniformity with a byte-offset correction for the
-  printable-ASCII range (32–126).
+  tags) against its library reference before benchmarking. Reported
+  variables, all in table format: design overview with ciphertext
+  expansion, encryption/decryption latency and throughput, throughput
+  scaling across payload sizes (1/10/100 KiB), session/key setup cost,
+  per-position diffusion (first/middle/last character), tamper rejection
+  across four maul vectors, wrong-key rejection, output
+  randomization/determinism checks, entropy against the alphabet ceiling,
+  chi-squared/df uniformity with a byte-offset correction for the
+  printable-ASCII range (32-126), bias-corrected plaintext-ciphertext
+  mutual information, and an IND-CPA left-or-right game (100 trials) with
+  the ECB control failing at chance as expected.
 * **Deterministic testing hook:** optional `salt` parameter on encryption,
   replacing test-time monkeypatching of the global CSPRNG.
 
@@ -70,10 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * **JCA reworked into a transcript MAC:** the per-event chained hash was
   replaced by a single SHA-256 digest over salt ‖ ordered transcript ‖
-  bipolar accumulators ‖ event count. The v0.1 bipolar accumulators
-  (`pos_sum`/`neg_sum`, dead code since v0.2) are restored into the tag.
-  Equivalent security (SHA-256 is itself a Merkle–Damgård chain) and ~17%
-  higher throughput.
+  bipolar accumulators ‖ event count. The v0.3 bipolar accumulators
+  (`pos_sum`/`neg_sum`, dead code since the chained-hash upgrade) are
+  restored into the tag. Equivalent security (SHA-256 is itself a
+  Merkle–Damgård chain) and ~17% higher throughput.
 * **`hmac` usage narrowed** to `compare_digest` for timing-safe tag
   comparison only; the MAC construction itself remains fully homegrown.
 
@@ -92,13 +100,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Benchmark harness:** chi-squared categories aligned with the
   printable-ASCII byte range via a byte-offset correction; diffusion
   measured against the ciphertext body rather than the authentication tag;
-  no-op adjacent-swap artifacts and ECB padding errors eliminated.
+  the accelerated AEAD fixed-IV path now prepends its nonce so ciphertext
+  body extraction is aligned; no-op adjacent-swap artifacts and ECB padding
+  errors eliminated.
 
 ### Security
 
 * Measured on the new suite: 100% tamper rejection across all four maul
-  vectors; entropy 6.505 bits against a 6.57-bit ceiling (99.0% normalized,
-  best of the tested targets); chi²/df 0.85. Still an educational design
+  vectors and 100% wrong-key rejection; entropy 6.50 bits against a
+  6.57-bit ceiling (98.9% normalized); chi²/df 0.90; bias-corrected mutual
+  information 0.000 bits (ECB control: 2.84). Still an educational design
   study with no security proof.
 
 ## [v0.3b] - 2026-Q1 (approximate)
@@ -119,12 +130,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-* **Non-linear bit whitening:** a masking layer in `transform()` derived
-  from the session salt, cumulative shift, and pointer position, applied as
-  modular addition/subtraction, intended to erase the bit bias inherent to
-  printable-only ASCII. Effectiveness is minimal at most: the salt is
-  public, so the mask is computable by anyone tracking the state. It is
-  retained as obfuscation, not secrecy.
+* **Integrity tag (JCA) introduced:** the first tag tracked bipolar jump
+  sums (sum of positive jumps, sum of negative jump magnitudes) plus an
+  event count, initialized with and bound to the unique 8-character
+  session salt to prevent cross-session tag collisions.
+* **High-entropy input mixing:** the JCA `record()` function integrates the
+  salt, current jump, character value, and rotor shift.
+* **Non-linear bit whitening (Hardened versions):** a masking layer in
+  `transform()` derived from the session salt, cumulative shift, and
+  pointer position, applied as modular addition/subtraction, intended to
+  erase the bit bias inherent to printable-only ASCII. The mask adds no
+  secrecy beyond the session key: the salt is public and the shift and
+  pointer are key-derived, so anyone who can reconstruct the engine state
+  can compute it. Reconstructing the state requires the seed and key,
+  which a zero-trust deployment exchanges under asymmetric encryption
+  anyway. Within that trust boundary the mask obscures the alphabet bias.
 * **Decoupled state logic:** the whitening layer operates independently of
   the S-Box mapping, so partial S-Box leakage does not directly reveal
   character substitutions.
@@ -134,6 +154,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+* **Chained-hash tag:** testing exposed that the bipolar sums are
+  commutative, so the tag was blind to transposition (verified
+  empirically: 100% collision on 2,000 random event permutations). The tag
+  was upgraded to a rolling SHA-256 chain in which every update depends on
+  the previous state; a re-check found 0 collisions on genuinely different
+  transcripts across 2,000 permutations.
 * **JCA integration (Hardened versions):** recording occurs
   post-substitution but pre-rotation (pre-whitening), so the tag accounts
   for the engine state at the exact moment of encryption and both mirror
@@ -151,37 +177,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-* **Chained-hash state model:** replaced the legacy bipolar-summation tag
-  with a rolling SHA-256 hash state for sequence-dependent integrity.
-* **High-entropy input mixing:** the JCA `record()` function integrates the
-  salt, current jump, character value, and rotor shift.
-* **Deterministic session binding:** the JCA state is initialized with the
-  unique 8-character session salt to prevent cross-session tag collisions.
+Increments to the base engine, each building on the last. No integrity tag
+yet.
 
-### Changed
+* **Cumulative geared shifts:** every jump value encountered adds to a
+  cumulative shift that offsets the rotor mapping for the current
+  character.
+* **The reflector (two-pass mirror):** a forward pass followed by a
+  reflection pass over the reversed intermediate text from the engine's
+  hot state, so a change in one part of the stream is reflected into the
+  earlier part.
+* **Scheduled state mutation:** the rotor is re-shuffled on an interval
+  derived from the jump values.
+* **Co-evolutionary mutation:** both the rotor and the key array are
+  re-shuffled from a seed derived from the current jump and character
+  count.
 
-* **BipolarJCA logic:** shifted from `pos_sum`/`neg_sum` tracking to a
-  cumulative update context capturing the entire execution path. (The
-  accumulators remained as dead code until v0.4 restored them into the
-  transcript digest.)
-* **Tag generation:** the final tag is the terminal result of the hash
-  chain, unique to the specific order of characters in the message,
-  emitted as a 64-character hex string (256 bits).
+## [v0.1] - 2026-Q1 (approximate)
 
-### Fixed
+### Added
 
-* **Transposition collisions:** the bipolar-summation tag collided on every
-  reordering of events (the sums are commutative). Order-dependent chaining
-  resolves this; verified empirically with 0 collisions on genuinely
-  different transcripts across 2,000 random permutations.
-* **State de-synchronization sensitivity:** any single-character
-  modification to the ciphertext desynchronizes the mutation schedule and
-  shift logic, collapsing the authentication chain.
-
-## [v0.1] - 2026-Q1 (approximate, reconstructed)
-
-* Initial Full-Hardened implementation. Authentication used bipolar
-  summation only (`pos_sum`/`neg_sum` with an event count), which was
-  order-insensitive and blind to transposition; superseded by v0.2.
-  Reconstructed from code vestiges and the v0.2 changelog entry — no
-  original changelog entry survives.
+* **Initial text cipher:** a keyed substitution rotor (deterministic
+  Fisher-Yates shuffle from the master seed) traversed by a signed
+  jump-pointer key array over the 95 printable ASCII characters. No
+  integrity mechanism; superseded by the engine increments of v0.2.
